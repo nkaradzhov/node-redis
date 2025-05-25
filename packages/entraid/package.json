@@ -38,7 +38,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git://github.com/redis/node-redis.git"
+    "url": "git://github.com/nkaradzhov/node-redis.git"
   },
   "bugs": {
     "url": "https://github.com/redis/node-redis/issues"
