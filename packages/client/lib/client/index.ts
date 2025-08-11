@@ -1,5 +1,5 @@
 import COMMANDS from '../commands';
-import RedisSocket, { RedisSocketOptions } from './socket';
+import RedisSocket, { RedisSocketOptions, RedisTcpSocketOptions } from './socket';
 import { BasicAuth, CredentialsError, CredentialsProvider, StreamingCredentialsProvider, UnableToObtainNewCredentialsError, Disposable } from '../authx';
 import RedisCommandsQueue, { CommandOptions } from './commands-queue';
 import { EventEmitter } from 'node:events';
@@ -20,6 +20,8 @@ import { BasicClientSideCache, ClientSideCacheConfig, ClientSideCacheProvider } 
 import { BasicCommandParser, CommandParser } from './parser';
 import SingleEntryCache from '../single-entry-cache';
 import { version } from '../../package.json'
+import EnterpriseMaintenanceManager, { MAINTENANCE_EVENTS, MovingEndpointType, SocketTimeoutUpdate } from './enterprise-maintenance-manager';
+import assert from 'node:assert';
 
 export interface RedisClientOptions<
   M extends RedisModules = RedisModules,
@@ -429,7 +431,7 @@ export default class RedisClient<
   }
 
   readonly #options?: RedisClientOptions<M, F, S, RESP, TYPE_MAPPING>;
-  readonly #socket: RedisSocket;
+  #socket: RedisSocket;
   readonly #queue: RedisCommandsQueue;
   #selectedDB = 0;
   #monitorCallback?: MonitorCallback<TYPE_MAPPING>;
@@ -451,7 +453,6 @@ export default class RedisClient<
   get clientSideCache() {
     return this._self.#clientSideCache;
   }
-
 
   get options(): RedisClientOptions<M, F, S, RESP> | undefined {
     return this._self.#options;
@@ -510,6 +511,16 @@ export default class RedisClient<
     this.#options = this.#initiateOptions(options);
     this.#queue = this.#initiateQueue();
     this.#socket = this.#createSocket(this.#options);
+    
+    if(options?.maintPushNotifications !== 'disabled') {
+      new EnterpriseMaintenanceManager(this.#queue, this.#options!)
+        .on(MAINTENANCE_EVENTS.PAUSE_WRITING, () => this._self.#pausedForMaintenance = true)
+        .on(MAINTENANCE_EVENTS.RESUME_WRITING, this.#resumeFromMaintenance.bind(this))
+        .on(MAINTENANCE_EVENTS.TIMEOUTS_UPDATE, (value: SocketTimeoutUpdate) => {
+          this._self.#socket.inMaintenance = value.inMaintenance;
+          this._self.#socket.setMaintenanceTimeout(value.timeout);
+        });
+    };
 
     if (options?.clientSideCache) {
       if (options.clientSideCache instanceof ClientSideCacheProvider) {
@@ -567,7 +578,13 @@ export default class RedisClient<
       this._commandOptions = options.commandOptions;
     }
 
+
+
     if (options) {
+      if(options.maintPushNotifications !== 'disabled') {
+        EnterpriseMaintenanceManager.setupDefaultMaintOptions(options)
+      }
+
       return RedisClient.parseOptions(options);
     }
 
@@ -743,6 +760,13 @@ export default class RedisClient<
     if (this.#clientSideCache) {
       commands.push({cmd: this.#clientSideCache.trackingOn()});
     }
+
+    assert(this.#options?.socket !== undefined);
+    const { tls, host } = this.#options?.socket as RedisTcpSocketOptions;
+    const maintenanceHandshakeCmd = await EnterpriseMaintenanceManager.getHandshakeCommand(!!tls, host!, this.#options);
+    if(maintenanceHandshakeCmd) {
+      commands.push(maintenanceHandshakeCmd);
+    };
 
     return commands;
   }
