@@ -442,6 +442,12 @@ export default class RedisClient<
   #watchEpoch?: number;
   #clientSideCache?: ClientSideCacheProvider;
   #credentialsSubscription: Disposable | null = null;
+  // Flag used to pause writing to the socket during maintenance windows.
+  // When true, prevents new commands from being written while waiting for:
+  // 1. New socket to be ready after maintenance redirect
+  // 2. In-flight commands on the old socket to complete
+  #pausedForMaintenance = false;
+
   get clientSideCache() {
     return this._self.#clientSideCache;
   }
@@ -478,6 +484,15 @@ export default class RedisClient<
    */
   get isDirtyWatch(): boolean {
     return this._self.#dirtyWatch !== undefined
+  }
+
+  async #resumeFromMaintenance(newSocket: RedisSocket) {
+    this._self.#socket.removeAllListeners();
+    this._self.#socket.destroy();
+    this._self.#socket = newSocket;
+    this._self.#pausedForMaintenance = false;
+    await this._self.#initiateSocket();
+    this._self.#maybeScheduleWrite();
   }
 
   /**
@@ -1135,6 +1150,9 @@ export default class RedisClient<
   }
 
   #write() {
+    if(this.#pausedForMaintenance) {
+      return
+    }
     this.#socket.write(this.#queue.commandsToWrite());
   }
 
