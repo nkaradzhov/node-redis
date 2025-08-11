@@ -455,7 +455,7 @@ export default class RedisClient<
     this.#validateOptions(options)
     this.#options = this.#initiateOptions(options);
     this.#queue = this.#initiateQueue();
-    this.#socket = this.#initiateSocket();
+    this.#socket = this.#createSocket(this.#options);
 
     if (options?.clientSideCache) {
       if (options.clientSideCache instanceof ClientSideCacheProvider) {
@@ -688,38 +688,10 @@ export default class RedisClient<
     return commands;
   }
 
-  #initiateSocket(): RedisSocket {
-    const socketInitiator = async () => {
-      const promises = [],
-        chainId = Symbol('Socket Initiator');
+  async #initiateSocket(): Promise<void> {
+    await this.#socket.waitForReady();
 
-      const resubscribePromise = this.#queue.resubscribe(chainId);
-      if (resubscribePromise) {
-        promises.push(resubscribePromise);
-      }
-
-      if (this.#monitorCallback) {
-        promises.push(
-          this.#queue.monitor(
-            this.#monitorCallback,
-            {
-              typeMapping: this._commandOptions?.typeMapping,
-              chainId,
-              asap: true
-            }
-          )
-        );
-      }
-
-      promises.push(...(await this.#handshake(chainId, true)));
-
-      if (promises.length) {
-        this.#write();
-        return Promise.all(promises);
-      }
-    };
-
-    return new RedisSocket(socketInitiator, this.#options?.socket)
+    this.#socket
       .on('data', chunk => {
         try {
           this.#queue.decoder.write(chunk);
@@ -737,15 +709,47 @@ export default class RedisClient<
           this.#queue.flushAll(err);
         }
       })
-      .on('connect', () => this.emit('connect'))
-      .on('ready', () => {
-        this.emit('ready');
-        this.#setPingTimer();
-        this.#maybeScheduleWrite();
-      })
       .on('reconnecting', () => this.emit('reconnecting'))
       .on('drain', () => this.#maybeScheduleWrite())
       .on('end', () => this.emit('end'));
+
+    const promises = [];
+    const chainId = Symbol('Socket Initiator');
+
+    const resubscribePromise = this.#queue.resubscribe(chainId);
+    if (resubscribePromise) {
+      promises.push(resubscribePromise);
+    }
+
+    if (this.#monitorCallback) {
+      promises.push(
+        this.#queue.monitor(
+          this.#monitorCallback,
+          {
+            typeMapping: this._commandOptions?.typeMapping,
+            chainId,
+            asap: true
+          }
+        )
+      );
+    }
+
+    promises.push(...(await this.#handshake(chainId, true)));
+
+    this.#setPingTimer();
+
+    if (promises.length) {
+      this.#write();
+      await Promise.all(promises);
+    }
+  }
+
+  #createSocket(options?: RedisClientOptions<M, F, S, RESP, TYPE_MAPPING>): RedisSocket {
+    return new RedisSocket(options?.socket)
+      .on('connect', () => this.emit('connect'))
+      .on('ready', () => {
+        this.emit('ready');
+      });
   }
 
   #pingTimer?: NodeJS.Timeout;
@@ -854,6 +858,7 @@ export default class RedisClient<
 
   async connect() {
     await this._self.#socket.connect();
+    await this._self.#initiateSocket();
     return this as unknown as RedisClientType<M, F, S, RESP, TYPE_MAPPING>;
   }
 
