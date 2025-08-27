@@ -46,9 +46,7 @@ describe("Push Notifications", () => {
       username: clientConfig.username,
       RESP: 3,
       maintPushNotifications: "auto",
-      maintMovingEndpointType: "external-ip",
-      maintRelaxedCommandTimeout: 10000,
-      maintRelaxedSocketTimeout: 10000,
+      maintMovingEndpointType: "auto",
     });
 
     client.on("error", (err: Error) => {
