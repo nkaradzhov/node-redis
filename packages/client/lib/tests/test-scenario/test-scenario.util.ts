@@ -1,5 +1,6 @@
 import { readFileSync } from "fs";
 import { createClient, RedisClientOptions } from "../../..";
+import { stub } from "sinon";
 
 type DatabaseEndpoint = {
   addr: string[];
@@ -109,35 +110,54 @@ export function getDatabaseConfig(
   };
 }
 
-export function createTestClient(
-  config: RedisConnectionConfig,
-  options: Partial<RedisClientOptions> = {}
-) {
-  return createClient({
-    socket: {
-      host: config.host,
-      port: config.port,
-      ...(config.tls === true ? { tls: true } : {}),
-    },
-    password: config.password,
-    username: config.username,
-    RESP: 3,
-    maintPushNotifications: "auto",
-    maintMovingEndpointType: "auto",
-    ...options,
-  });
+// TODO this should be moved in the tests utils package
+export async function blockSetImmediate(fn: () => Promise<unknown>) {
+  let setImmediateStub: any;
+
+  try {
+    setImmediateStub = stub(global, "setImmediate");
+    setImmediateStub.callsFake(() => {
+      //Dont call the callback, effectively blocking execution
+    });
+    await fn();
+  } finally {
+    if (setImmediateStub) {
+      setImmediateStub.restore();
+    }
+  }
 }
 
+/**
+ * Factory class for creating and managing Redis clients
+ */
 export class ClientFactory {
-  private clients = new Map<
+  private readonly clients = new Map<
     string,
     ReturnType<typeof createClient<any, any, any, any>>
   >();
 
   constructor(private readonly config: RedisConnectionConfig) {}
 
+  /**
+   * Creates a new client with the specified options and connects it to the database
+   * @param key - The key to store the client under
+   * @param options - Optional client options
+   * @returns The created and connected client
+   */
   async create(key: string, options: Partial<RedisClientOptions> = {}) {
-    const client = createTestClient(this.config, options);
+    const client = createClient({
+      socket: {
+        host: this.config.host,
+        port: this.config.port,
+        ...(this.config.tls === true ? { tls: true } : {}),
+      },
+      password: this.config.password,
+      username: this.config.username,
+      RESP: 3,
+      maintPushNotifications: "auto",
+      maintMovingEndpointType: "auto",
+      ...options,
+    });
 
     client.on("error", (err: Error) => {
       throw new Error(`Client error: ${err.message}`);
@@ -150,6 +170,11 @@ export class ClientFactory {
     return client;
   }
 
+  /**
+   * Gets an existing client by key or the first one if no key is provided
+   * @param key - The key of the client to retrieve
+   * @returns The client if found, undefined otherwise
+   */
   get(key?: string) {
     if (key) {
       return this.clients.get(key);
@@ -159,6 +184,9 @@ export class ClientFactory {
     return this.clients.values().next().value;
   }
 
+  /**
+   * Destroys all created clients
+   */
   destroyAll() {
     this.clients.forEach((client) => {
       if (client && client.isOpen) {

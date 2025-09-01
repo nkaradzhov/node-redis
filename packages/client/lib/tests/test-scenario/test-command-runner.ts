@@ -1,4 +1,3 @@
-
 import { randomUUID } from "node:crypto";
 import { setTimeout } from "node:timers/promises";
 import { createClient } from "../../..";
@@ -23,18 +22,21 @@ type FireCommandsUntilStopSignalOptions = {
   ) => Array<() => Promise<unknown>>;
 };
 
+/**
+ * Utility class for running test commands until a stop signal is received
+ */
 export class TestCommandRunner {
-  // Make defaultOptions static
-  private static defaultOptions: FireCommandsUntilStopSignalOptions = {
+  private static readonly defaultOptions: FireCommandsUntilStopSignalOptions = {
     batchSize: 60,
     timeoutMs: 10,
-    createCommands: (client) => [
+    createCommands: (
+      client: ReturnType<typeof createClient<any, any, any, any>>
+    ) => [
       () => client.set(randomUUID(), Date.now()),
       () => client.get(randomUUID()),
     ],
   };
 
-  // Make helper methods static
   static #toSettled<T>(p: Promise<T>) {
     return p
       .then((value) => ({ status: "fulfilled" as const, value, error: null }))
@@ -57,14 +59,20 @@ export class TestCommandRunner {
         ...result,
         stop: false,
       })),
-      TestCommandRunner.#toSettled<T>(stopper).then((result) => ({ 
-        ...result, 
-        stop: true 
+      TestCommandRunner.#toSettled<T>(stopper).then((result) => ({
+        ...result,
+        stop: true,
       })),
     ]);
   }
 
-  // Make main method static
+  /**
+   * Fires a batch of test commands until a stop signal is received
+   * @param client - The Redis client to use
+   * @param stopSignalPromise - Promise that resolves when the execution should stop
+   * @param options - Options for the command execution
+   * @returns An object containing the promises of all executed commands and the result of the stop signal
+   */
   static async fireCommandsUntilStopSignal(
     client: ReturnType<typeof createClient<any, any, any, any>>,
     stopSignalPromise: Promise<unknown>,

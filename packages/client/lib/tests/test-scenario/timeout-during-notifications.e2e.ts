@@ -7,28 +7,11 @@ import {
   getDatabaseConfigFromEnv,
   getEnvConfig,
   RedisConnectionConfig,
+  blockSetImmediate
 } from "./test-scenario.util";
 import { createClient } from "../../..";
 import { before } from "mocha";
 import { TestCommandRunner } from "./test-command-runner";
-import { stub } from "sinon";
-
-// TODO this should be moved in test utils
-async function blockSetImmediate(fn: () => Promise<unknown>) {
-  let setImmediateStub: any;
-
-  try {
-    setImmediateStub = stub(global, "setImmediate");
-    setImmediateStub.callsFake(() => {
-      //Dont call the callback, effectively blocking execution
-    });
-    await fn();
-  } finally {
-    if (setImmediateStub) {
-      setImmediateStub.restore();
-    }
-  }
-}
 
 describe("Timeout Handling During Notifications", () => {
   let clientConfig: RedisConnectionConfig;
@@ -134,7 +117,7 @@ describe("Timeout Handling During Notifications", () => {
         },
       }
     );
-    
+
     const { action_id: bindAndMigrateActionId } =
       await faultInjectorClient.migrateAndBindAction({
         bdbId: clientConfig.bdbId,
