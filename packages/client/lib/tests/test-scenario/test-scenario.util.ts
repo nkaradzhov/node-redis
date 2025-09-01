@@ -1,4 +1,5 @@
 import { readFileSync } from "fs";
+import { createClient, RedisClientOptions } from "../../..";
 
 type DatabaseEndpoint = {
   addr: string[];
@@ -108,3 +109,61 @@ export function getDatabaseConfig(
   };
 }
 
+export function createTestClient(
+  config: RedisConnectionConfig,
+  options: Partial<RedisClientOptions> = {}
+) {
+  return createClient({
+    socket: {
+      host: config.host,
+      port: config.port,
+      ...(config.tls === true ? { tls: true } : {}),
+    },
+    password: config.password,
+    username: config.username,
+    RESP: 3,
+    maintPushNotifications: "auto",
+    maintMovingEndpointType: "auto",
+    ...options,
+  });
+}
+
+export class ClientFactory {
+  private clients = new Map<
+    string,
+    ReturnType<typeof createClient<any, any, any, any>>
+  >();
+
+  constructor(private readonly config: RedisConnectionConfig) {}
+
+  async create(key: string, options: Partial<RedisClientOptions> = {}) {
+    const client = createTestClient(this.config, options);
+
+    client.on("error", (err: Error) => {
+      throw new Error(`Client error: ${err.message}`);
+    });
+
+    await client.connect();
+
+    this.clients.set(key, client);
+
+    return client;
+  }
+
+  get(key?: string) {
+    if (key) {
+      return this.clients.get(key);
+    }
+
+    // Get the first one if no key is provided
+    return this.clients.values().next().value;
+  }
+
+  destroyAll() {
+    this.clients.forEach((client) => {
+      if (client && client.isOpen) {
+        client.destroy();
+      }
+    });
+  }
+}

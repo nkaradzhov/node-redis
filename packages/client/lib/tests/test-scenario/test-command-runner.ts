@@ -1,3 +1,4 @@
+
 import { randomUUID } from "node:crypto";
 import { setTimeout } from "node:timers/promises";
 import { createClient } from "../../..";
@@ -23,22 +24,18 @@ type FireCommandsUntilStopSignalOptions = {
 };
 
 export class TestCommandRunner {
-  constructor(
-    private client: ReturnType<typeof createClient<any, any, any, any>>
-  ) {}
-
-  private defaultOptions: FireCommandsUntilStopSignalOptions = {
+  // Make defaultOptions static
+  private static defaultOptions: FireCommandsUntilStopSignalOptions = {
     batchSize: 60,
     timeoutMs: 10,
-    createCommands: (
-      client: ReturnType<typeof createClient<any, any, any, any>>
-    ) => [
+    createCommands: (client) => [
       () => client.set(randomUUID(), Date.now()),
       () => client.get(randomUUID()),
     ],
   };
 
-  #toSettled<T>(p: Promise<T>) {
+  // Make helper methods static
+  static #toSettled<T>(p: Promise<T>) {
     return p
       .then((value) => ({ status: "fulfilled" as const, value, error: null }))
       .catch((reason) => ({
@@ -48,7 +45,7 @@ export class TestCommandRunner {
       }));
   }
 
-  async #racePromises<S, T>({
+  static async #racePromises<S, T>({
     timeout,
     stopper,
   }: {
@@ -56,26 +53,25 @@ export class TestCommandRunner {
     stopper: Promise<T>;
   }) {
     return Promise.race([
-      this.#toSettled<S>(timeout).then((result) => ({
+      TestCommandRunner.#toSettled<S>(timeout).then((result) => ({
         ...result,
         stop: false,
       })),
-      this.#toSettled<T>(stopper).then((result) => ({ ...result, stop: true })),
+      TestCommandRunner.#toSettled<T>(stopper).then((result) => ({ 
+        ...result, 
+        stop: true 
+      })),
     ]);
   }
 
-  /**
-   * Fires commands until a stop signal is received.
-   * @param stopSignalPromise Promise that resolves when the command execution should stop
-   * @param options Options for the command execution
-   * @returns Promise that resolves when the stop signal is received
-   */
-  async fireCommandsUntilStopSignal(
+  // Make main method static
+  static async fireCommandsUntilStopSignal(
+    client: ReturnType<typeof createClient<any, any, any, any>>,
     stopSignalPromise: Promise<unknown>,
     options?: Partial<FireCommandsUntilStopSignalOptions>
   ) {
     const executeOptions = {
-      ...this.defaultOptions,
+      ...TestCommandRunner.defaultOptions,
       ...options,
     };
 
@@ -83,12 +79,12 @@ export class TestCommandRunner {
 
     while (true) {
       for (let i = 0; i < executeOptions.batchSize; i++) {
-        for (const command of executeOptions.createCommands(this.client)) {
-          commandPromises.push(this.#toSettled(command()));
+        for (const command of executeOptions.createCommands(client)) {
+          commandPromises.push(TestCommandRunner.#toSettled(command()));
         }
       }
 
-      const result = await this.#racePromises({
+      const result = await TestCommandRunner.#racePromises({
         timeout: setTimeout(executeOptions.timeoutMs),
         stopper: stopSignalPromise,
       });
