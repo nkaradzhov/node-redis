@@ -8,6 +8,7 @@
     "tagMatch": "client@*",
     "commitMessage": "Release ${tagName}",
     "tagAnnotation": "Release ${tagName}",
-    "commitArgs": "--all"
+    "commitArgs": "--all",
+    "requireCleanWorkingDir": false
   }
 }
