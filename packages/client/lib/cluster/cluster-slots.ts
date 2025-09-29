@@ -7,6 +7,7 @@ import { RedisArgument, RedisFunctions, RedisModules, RedisScripts, RespVersions
 import calculateSlot from 'cluster-key-slot';
 import { RedisSocketOptions } from '../client/socket';
 import { BasicPooledClientSideCache, PooledClientSideCacheProvider } from '../client/cache';
+import clientCounter from '../client/client-counter';
 
 interface NodeAddress {
   host: string;
@@ -160,6 +161,7 @@ export default class RedisClusterSlots<
   }
 
   async #discoverWithRootNodes() {
+    console.log('CS::#discoverWithRootNodes()');
     let start = Math.floor(Math.random() * this.#options.rootNodes.length);
     for (let i = start; i < this.#options.rootNodes.length; i++) {
       if (!this.#isOpen) throw new Error('Cluster closed');
@@ -174,6 +176,7 @@ export default class RedisClusterSlots<
     throw new RootNodesUnavailableError();
   }
 
+  //TODO investigate what happens with the masters and replicas. It looks like they
   #resetSlots() {
     this.slots = new Array(RedisClusterSlots.#SLOTS);
     this.masters = [];
@@ -182,6 +185,8 @@ export default class RedisClusterSlots<
   }
 
   async #discover(rootNode: RedisClusterClientOptions) {
+    console.log('CS::discover()', rootNode.socket?.host);
+    console.log(`Clients before`, clientCounter.getActiveClients());
     this.clientSideCache?.clear();
     this.clientSideCache?.disable();
     try {
@@ -190,8 +195,11 @@ export default class RedisClusterSlots<
         eagerConnect = this.#options.minimizeConnections !== true;
 
       const shards = await this.#getShards(rootNode);
+      console.log('Shards', shards.map(s => `${s.from}-${s.to} -> ${s.master.host}`));
       this.#resetSlots(); // Reset slots AFTER shards have been fetched to prevent a race condition
       for (const { from, to, master, replicas } of shards) {
+        // TODO check if old slot nodes are disconnected and deleted
+        console.log(`Creating shard?`);
         const shard: Shard<M, F, S, RESP, TYPE_MAPPING> = {
           master: this.#initiateSlotNode(master, false, eagerConnect, addressesInUse, promises)
         };
@@ -208,6 +216,7 @@ export default class RedisClusterSlots<
       }
 
       if (this.pubSubNode && !addressesInUse.has(this.pubSubNode.address)) {
+        console.log('refresh pubsubnode?');
         const channelsListeners = this.pubSubNode.client.getPubSubListeners(PUBSUB_TYPE.CHANNELS),
           patternsListeners = this.pubSubNode.client.getPubSubListeners(PUBSUB_TYPE.PATTERNS);
 
@@ -223,7 +232,30 @@ export default class RedisClusterSlots<
         }
       }
 
+      const allChannelListeners = new Map<string, ChannelListeners>();
+
+      for (const master of this.masters) {
+        const shardedClient = master.pubSub?.client;
+        if (!shardedClient) continue;
+        for (const channel of shardedClient.getShardedChannels()) {
+          const listeners = shardedClient.removeShardedListeners(channel);
+          const existingListeners = allChannelListeners.get(channel);
+          if(existingListeners) {
+            console.log(`hmmm, why are there existing listeners?`, existingListeners, existingListeners === listeners);
+          } else {
+            allChannelListeners.set(channel, listeners);
+          }
+        }
+      }
+
+      console.log(`we have extracted all listeners`, allChannelListeners);
+
+      console.log('addressesInUse', addressesInUse);
+      console.log('nodeByAddress', this.nodeByAddress.keys());
+      //Keep only the nodes that are still in use
       for (const [address, node] of this.nodeByAddress.entries()) {
+        //@ts-ignore
+        console.log(address, 'client:', !!node.client, 'pubsub client:', !!node.pubSub);
         if (addressesInUse.has(address)) continue;
 
         if (node.client) {
@@ -238,11 +270,16 @@ export default class RedisClusterSlots<
         this.nodeByAddress.delete(address);
       }
 
+      this.#emit('__refreshShardedChannels', allChannelListeners);
+
+
       await Promise.all(promises);
       this.clientSideCache?.enable();
 
+      console.log(`Clients after`, clientCounter.getActiveClients());
       return true;
     } catch (err) {
+      console.log('ERROR REDISCOVERING', err);
       this.#emit('error', err);
       return false;
     }
@@ -256,6 +293,7 @@ export default class RedisClusterSlots<
     options.commandOptions = undefined;
 
     // TODO: find a way to avoid type casting
+    console.log('create client to get shards');
     const client = await this.#clientFactory(options as RedisClientOptions<M, F, S, RESP, {}>)
       .on('error', err => this.#emit('error', err))
       .connect();
@@ -333,7 +371,7 @@ export default class RedisClusterSlots<
   }
 
   #createClient(node: ShardNode<M, F, S, RESP, TYPE_MAPPING>, readonly = node.readonly) {
-    return this.#clientFactory(
+    const client = this.#clientFactory(
       this.#clientOptionsDefaults({
         clientSideCache: this.clientSideCache,
         RESP: this.#options.RESP,
@@ -343,10 +381,20 @@ export default class RedisClusterSlots<
         },
         readonly
       })
-    ).on('error', err => console.error(err));
+    )
+
+    client
+      .on('__MOVED', () => {
+        console.log(`cluster::createClient -> MOVED, rediscover`);
+        this.rediscover(client);
+      })
+      .on('error', err => console.error(err));
+
+    return client;
   }
 
   #createNodeClient(node: ShardNode<M, F, S, RESP, TYPE_MAPPING>, readonly?: boolean) {
+    console.log("CS::#createNodeClient", node.host);
     const client = node.client = this.#createClient(node, readonly);
     return node.connectPromise = client.connect()
       .finally(() => node.connectPromise = undefined);
@@ -363,6 +411,7 @@ export default class RedisClusterSlots<
   #runningRediscoverPromise?: Promise<void>;
 
   async rediscover(startWith: RedisClientType<M, F, S, RESP>): Promise<void> {
+    console.log(`ClusterSlots::rediscover()`);
     this.#runningRediscoverPromise ??= this.#rediscover(startWith)
       .finally(() => this.#runningRediscoverPromise = undefined);
     return this.#runningRediscoverPromise;
@@ -537,12 +586,13 @@ export default class RedisClusterSlots<
   }
 
   async #initiatePubSubClient(toResubscribe?: PubSubToResubscribe) {
+    console.log("CS::#initiatePubSubClient", toResubscribe);
     const index = Math.floor(Math.random() * (this.masters.length + this.replicas.length)),
       node = index < this.masters.length ?
         this.masters[index] :
         this.replicas[index - this.masters.length],
         client = this.#createClient(node, false);
-      
+
     this.pubSubNode = {
       address: node.address,
       client,
@@ -586,8 +636,10 @@ export default class RedisClusterSlots<
   }
 
   async #initiateShardedPubSubClient(master: MasterNode<M, F, S, RESP, TYPE_MAPPING>) {
+    console.log("CS::#initiateShardedPubSubClient()", master.host);
     const client = this.#createClient(master, false)
       .on('server-sunsubscribe', async (channel, listeners) => {
+        console.log('??????????????????????????????????', channel, listeners);
         try {
           await this.rediscover(client);
           const redirectTo = await this.getShardedPubSubClient(channel);

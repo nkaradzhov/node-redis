@@ -20,6 +20,7 @@ import { BasicClientSideCache, ClientSideCacheConfig, ClientSideCacheProvider } 
 import { BasicCommandParser, CommandParser } from './parser';
 import SingleEntryCache from '../single-entry-cache';
 import { version } from '../../package.json'
+import clientCounter from './client-counter';
 
 export interface RedisClientOptions<
   M extends RedisModules = RedisModules,
@@ -450,8 +451,10 @@ export default class RedisClient<
     this._self.#dirtyWatch = msg;
   }
 
+  id: number
   constructor(options?: RedisClientOptions<M, F, S, RESP, TYPE_MAPPING>) {
     super();
+    this.id = clientCounter.getNextId();
     this.#validateOptions(options)
     this.#options = this.#initiateOptions(options);
     this.#queue = this.#initiateQueue();
@@ -682,13 +685,26 @@ export default class RedisClient<
     return commands;
   }
 
+  #getHost() {
+    //@ts-ignore
+    return this.options?.url ?? this.options?.socket?.host
+  }
+
   #initiateSocket(): RedisSocket {
     const socketInitiator = async () => {
       const promises = [],
         chainId = Symbol('Socket Initiator');
 
       const resubscribePromise = this.#queue.resubscribe(chainId);
+      resubscribePromise?.catch(error => {
+        console.log(`Client::#initiateSocket() resubscribe error`, error);
+        if (error.message && error.message.startsWith('MOVED')) {
+          console.log('should propagate MOVED to cluster....');
+          this.emit('__MOVED')
+        }
+      });
       if (resubscribePromise) {
+        console.log(`Resubscribe performed from Client${this.id} ${this.#getHost()}`);
         promises.push(resubscribePromise);
       }
 
@@ -847,6 +863,7 @@ export default class RedisClient<
   }
 
   async connect() {
+    console.log(`Create Client${this._self.id} ${this._self.#getHost()}`);
     await this._self.#socket.connect();
     return this as unknown as RedisClientType<M, F, S, RESP, TYPE_MAPPING>;
   }
@@ -1040,6 +1057,14 @@ export default class RedisClient<
   }
 
   sUnsubscribe = this.SUNSUBSCRIBE;
+
+  getShardedChannels(): IterableIterator<string> {
+    return this._self.#queue.getShardedChannels();
+  }
+
+  removeShardedListeners(channel: string): ChannelListeners {
+    return this._self.#queue.removeShardedListeners(channel);
+  }
 
   async WATCH(key: RedisVariadicArgument) {
     const reply = await this._self.sendCommand(
@@ -1390,6 +1415,9 @@ export default class RedisClient<
    * Destroy the client. Rejects all commands immediately.
    */
   destroy() {
+    //@ts-ignore
+    console.log(`Destroy Client(${this.id}) ${this._self.#getHost()}`);
+    clientCounter.removeClient(this.id);
     clearTimeout(this._self.#pingTimer);
     this._self.#queue.flushAll(new DisconnectsClientError());
     this._self.#socket.destroy();

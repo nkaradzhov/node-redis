@@ -263,6 +263,7 @@ export default class RedisCommandsQueue {
     listener?: PubSubListener<T>,
     returnBuffers?: T
   ) {
+    console.log(`CQ::unsubscribe(${channels})`);
     const command = this.#pubSub.unsubscribe(type, channels, listener, returnBuffers);
     if (!command) return;
 
@@ -279,6 +280,14 @@ export default class RedisCommandsQueue {
     }
 
     return this.#addPubSubCommand(command);
+  }
+
+  getShardedChannels(): IterableIterator<string> {
+    return this.#pubSub.getShardedChannels();
+  }
+
+  removeShardedListeners(channel: string): ChannelListeners {
+    return this.#pubSub.removeShardedListeners(channel);
   }
 
   resubscribe(chainId?: symbol) {

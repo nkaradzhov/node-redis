@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events';
 import { attachConfig, functionArgumentsPrefix, getTransformReply, scriptArgumentsPrefix } from '../commander';
 import RedisClusterSlots, { NodeAddressMap, ShardNode } from './cluster-slots';
 import RedisClusterMultiCommand, { RedisClusterMultiCommandType } from './multi-command';
-import { PubSubListener } from '../client/pub-sub';
+import { ChannelListeners, PubSubListener } from '../client/pub-sub';
 import { ErrorReply } from '../errors';
 import { RedisTcpSocketOptions } from '../client/socket';
 import { ClientSideCacheConfig, PooledClientSideCacheProvider } from '../client/cache';
@@ -310,6 +310,7 @@ export default class RedisCluster<
 
     this._options = options;
     this._slots = new RedisClusterSlots(options, this.emit.bind(this));
+    this.on('__refreshShardedChannels', this.refreshShardedChannelsSubscriptions.bind(this));
 
     if (options?.commandOptions) {
       this._commandOptions = options.commandOptions;
@@ -449,6 +450,7 @@ export default class RedisCluster<
         }
 
         if (err.message.startsWith('MOVED')) {
+          console.log('Cluster::_execute() -> MOVED, rediscover');
           await this._slots.rediscover(client);
           client = await this._slots.getClient(firstKey, isReadonly);
           continue;
@@ -553,6 +555,7 @@ export default class RedisCluster<
       firstChannel = Array.isArray(channels) ? channels[0] : channels;
     let client = await this._self._slots.getShardedPubSubClient(firstChannel);
     for (let i = 0; ; i++) {
+      console.log(`SSUBSCRIBE try ${i}`);
       try {
         return await client.SSUBSCRIBE(channels, listener, bufferMode);
       } catch (err) {
@@ -561,6 +564,7 @@ export default class RedisCluster<
         }
 
         if (err.message.startsWith('MOVED')) {
+          console.log(`RedisCluster::SSUBSCRIBE() -> MOVED, rediscover`);
           await this._self._slots.rediscover(client);
           client = await this._self._slots.getShardedPubSubClient(firstChannel);
           continue;
@@ -582,6 +586,17 @@ export default class RedisCluster<
       Array.isArray(channels) ? channels[0] : channels,
       client => client.SUNSUBSCRIBE(channels, listener, bufferMode)
     );
+  }
+
+  refreshShardedChannelsSubscriptions(allChannelListeners: Map<string, ChannelListeners>) {
+    for(const [channel, listeners] of allChannelListeners) {
+      for(const bufListener of listeners.buffers) {
+        this.sSubscribe(channel, bufListener, true);
+      }
+      for(const strListener of listeners.strings) {
+        this.sSubscribe(channel, strListener);
+      }
+    }
   }
 
   sUnsubscribe = this.SUNSUBSCRIBE;
