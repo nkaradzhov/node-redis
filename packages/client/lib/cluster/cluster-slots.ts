@@ -453,7 +453,7 @@ export default class RedisClusterSlots<
   nodeClient(node: ShardNode<M, F, S, RESP, TYPE_MAPPING>) {
     return (
       node.connectPromise ?? // if the node is connecting
-      node.client ?? // if the node is connected
+      (node.client ? Promise.resolve(node.client) : undefined) ?? // if the node is connected
       this.#createNodeClient(node) // if the not is disconnected
     );
   }
@@ -547,20 +547,30 @@ export default class RedisClusterSlots<
     this.#emit('disconnect');
   }
 
-  getClient(
+  async getClientAndSlotNumber(
     firstKey: RedisArgument | undefined,
     isReadonly: boolean | undefined
-  ) {
+  ): Promise<{
+    client: RedisClientType<M, F, S, RESP, TYPE_MAPPING>,
+    slotNumber?: number
+  }> {
     if (!firstKey) {
-      return this.nodeClient(this.getRandomNode());
+      return {
+        client: await this.nodeClient(this.getRandomNode())
+      };
     }
 
     const slotNumber = calculateSlot(firstKey);
     if (!isReadonly) {
-      return this.nodeClient(this.slots[slotNumber].master);
+      return {
+        client: await this.nodeClient(this.slots[slotNumber].master),
+        slotNumber
+      };
     }
 
-    return this.nodeClient(this.getSlotRandomNode(slotNumber));
+    return {
+      client: await this.nodeClient(this.getSlotRandomNode(slotNumber))
+    };
   }
 
   *#iterateAllNodes() {
