@@ -19,7 +19,7 @@ import {
   RedisClusterType
 } from '@redis/client/index';
 import { RedisNode } from '@redis/client/lib/sentinel/types'
-import { spawnRedisServer, spawnRedisCluster, spawnRedisSentinel, RedisServerDockerOptions, RedisServerDocker, spawnSentinelNode, spawnRedisServerDocker } from './dockers';
+import { spawnRedisServer, spawnRedisCluster, spawnRedisSentinel, RedisServerDockerOptions, RedisServerDocker, spawnSentinelNode, spawnRedisServerDocker, spawnProxiedRedisServer } from './dockers';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 
@@ -27,6 +27,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { RedisProxy, getFreePortNumber } from './proxy/redis-proxy';
+
 
 interface TestUtilsConfig {
   /**
@@ -298,6 +299,54 @@ export default class TestUtils {
       }
     });
   }
+
+  testWithProxiedCluster<
+    M extends RedisModules = {},
+    F extends RedisFunctions = {},
+    S extends RedisScripts = {},
+    RESP extends RespVersions = 2,
+    TYPE_MAPPING extends TypeMapping = {}
+  >(
+    title: string,
+    fn: (proxiedClusterClient: RedisClusterType<M, F, S, RESP, TYPE_MAPPING>, proxyUrl: string) => unknown,
+    options: Omit<ClusterTestOptions<M, F, S, RESP, TYPE_MAPPING>, 'numberOfReplicas' | 'minimumDockerVersion' | 'serverArguments'>
+  ) {
+    let spawnPromise: ReturnType<typeof spawnProxiedRedisServer>;
+    before(function () {
+      this.timeout(30000);
+      spawnPromise = spawnProxiedRedisServer({ nOfProxies: options.numberOfMasters ?? 3, defaultInterceptors: ['cluster', 'hitless'] });
+    });
+
+    it(title, async function () {
+      if (!spawnPromise) return this.skip();
+      const { ports } = await spawnPromise;
+
+      const cluster = createCluster({
+        rootNodes: ports.map(port => ({
+          socket: {
+            port
+          }
+        })),
+        minimizeConnections: options.clusterConfiguration?.minimizeConnections ?? true,
+        ...options.clusterConfiguration
+      });
+
+      if(options.disableClusterSetup) {
+        return fn(cluster, 'hh');
+      }
+
+      await cluster.connect();
+
+      try {
+        await TestUtils.#clusterFlushAll(cluster);
+        await fn(cluster, 'hi');
+      } finally {
+        await TestUtils.#clusterFlushAll(cluster);
+        cluster.destroy();
+      }
+    });
+  }
+
   testWithProxiedClient(
     title: string,
     fn: (proxiedClient: RedisClientType<any, any, any, any, any>, proxy: RedisProxy) => unknown,
