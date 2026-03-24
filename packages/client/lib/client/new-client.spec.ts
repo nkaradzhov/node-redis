@@ -27,31 +27,6 @@ describe('NewClient', () => {
   }, GLOBAL.SERVERS.OPEN);
 });
 
-describe('NewClient1', () => {
-  testUtils.testWithClient('get/getRaw/getResp over a real client', async client => {
-    const key = 'foo';
-    await client.set(key, 'value');
-
-    const c = client.newClient1
-
-    const getResponse = await c.get(key);
-    console.log('.get() -> ', getResponse);
-    assert.equal(getResponse, 'value');
-
-    const rawResponse = await c.get(key, { parseMode: 'raw'});
-    console.log('.getRaw() -> ', rawResponse, '.toString() -> ', stringify(rawResponse));
-    assert.deepEqual(rawResponse, Buffer.from('$5\r\nvalue\r\n'));
-
-    const respResponse = await c.get(key, {parseMode: 'resp'});
-    console.log('.respResponse() -> ', respResponse, '.toString() -> ', stringify(respResponse));
-    assert.deepEqual(respResponse, {
-      type: 'BLOB_STRING',
-      value: Buffer.from('value')
-    });
-  }, GLOBAL.SERVERS.OPEN);
-});
-
-
 const stringify = (value: RespReply | Buffer): unknown => {
   if (value instanceof Buffer) {
     return value.toString().replace(/\r\n|\r|\n/g, ' ')
