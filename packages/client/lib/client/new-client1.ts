@@ -69,9 +69,12 @@ export class NewClient1 {
 
   async #executeCommand<O extends MaybeCommandOptions, DEFAULT_REPLY>(
     command: Command,
-    parser: BasicCommandParser,
-    commandOptions?: O
+    commandOptions: O | undefined,
+    ...args: Array<unknown>
   ): Promise<Reply1<O, DEFAULT_REPLY>> {
+    const parser = new BasicCommandParser();
+    command.parseCommand(parser, ...args);
+
     const reply = await this.#execute<unknown>(parser.redisArgs, commandOptions);
 
     const parseMode = commandOptions?.parseMode;
@@ -95,12 +98,10 @@ export class NewClient1 {
     key: RedisArgument,
     commandOption?: O
   ): Promise<Reply1<O, string | null>> {
-    const parser = new BasicCommandParser();
-    GET.parseCommand(parser, key);
     return this.#executeCommand<O, string | null>(
       GET,
-      parser,
-      commandOption
+      commandOption,
+      key
     );
   }
 
@@ -114,12 +115,12 @@ export class NewClient1 {
     options?: SetOptions,
     commandOptions?: O
   ): Promise<Reply1<O, string | null>> {
-    const parser = new BasicCommandParser();
-    SET.parseCommand(parser, key, value, options);
     return this.#executeCommand<O, string | null>(
       SET,
-      parser,
-      commandOptions
+      commandOptions,
+      key,
+      value,
+      options
     );
   }
 
@@ -128,26 +129,21 @@ export class NewClient1 {
   hSet<O extends MaybeCommandOptions = undefined>(
     ...args: [...HSETArguments, commandOptions?: O]
   ): Promise<Reply1<O, number>> {
-    const parser = new BasicCommandParser();
     const lastArg = args[args.length - 1];
     const commandOptions = (isCommandOptions(lastArg) ? lastArg : undefined) as O | undefined;
     const hSetArgs = (commandOptions ? args.slice(0, -1) : args) as HSETArguments;
-    HSET.parseCommand(parser, ...hSetArgs);
     return this.#executeCommand<O, number>(
       HSET,
-      parser,
-      commandOptions
+      commandOptions,
+      ...hSetArgs
     );
   }
 
   clientInfo<O extends MaybeCommandOptions = undefined>(
     commandOptions?: O
   ): Promise<Reply1<O, ClientInfoReply>> {
-    const parser = new BasicCommandParser();
-    CLIENT_INFO.parseCommand(parser);
     return this.#executeCommand<O, ClientInfoReply>(
       CLIENT_INFO,
-      parser,
       commandOptions
     );
   }
