@@ -1,6 +1,10 @@
 import { RedisArgument } from '../..';
+import { getTransformReply } from '../commander';
+import CLIENT_INFO, { ClientInfoReply } from '../commands/CLIENT_INFO';
+import GET from '../commands/GET';
 import HSET, { HSETArguments } from '../commands/HSET';
 import SET, { SetOptions } from '../commands/SET';
+import { Command, RespVersions } from '../RESP/types';
 import { CommandOptions } from './commands-queue';
 import RedisCommandsQueue from './commands-queue';
 import { RespReply } from './new-client';
@@ -14,8 +18,8 @@ export type Reply<
   PARSE_MODE,
   DEFAULT_REPLY
 > = (
-  PARSE_MODE extends {parseMode: 'resp'} ? RespReply :
-  PARSE_MODE extends {parseMode: 'raw'} ? Buffer :
+  PARSE_MODE extends { parseMode: 'resp' } ? RespReply :
+  PARSE_MODE extends { parseMode: 'raw' } ? Buffer :
   DEFAULT_REPLY
 );
 
@@ -51,7 +55,11 @@ function isCommandOptions(value: unknown): value is BrandedCommandOptions {
 }
 
 export class NewClient1 {
-  constructor(private queue: RedisCommandsQueue, private socket: RedisSocket) { }
+  constructor(
+    private queue: RedisCommandsQueue,
+    private socket: RedisSocket,
+    private resp: RespVersions
+  ) { }
 
   #execute<T>(args: ReadonlyArray<RedisArgument>, clientOptions?: CommandOptions): Promise<T> {
     const replyPromise = this.queue.addCommand<T>(args, clientOptions);
@@ -59,15 +67,41 @@ export class NewClient1 {
     return replyPromise;
   }
 
+  async #executeCommand<O extends MaybeCommandOptions, DEFAULT_REPLY>(
+    command: Command,
+    parser: BasicCommandParser,
+    commandOptions?: O
+  ): Promise<Reply1<O, DEFAULT_REPLY>> {
+    const reply = await this.#execute<unknown>(parser.redisArgs, commandOptions);
+
+    const parseMode = commandOptions?.parseMode;
+    if (parseMode !== undefined && parseMode !== 'idiomatic') {
+      return reply as Reply1<O, DEFAULT_REPLY>;
+    }
+
+    const transformReply = getTransformReply(command, this.resp);
+    if (!transformReply) {
+      return reply as Reply1<O, DEFAULT_REPLY>;
+    }
+
+    return transformReply(
+      reply,
+      parser.preserve,
+      commandOptions?.typeMapping
+    ) as Reply1<O, DEFAULT_REPLY>;
+  }
+
   get<O extends MaybeCommandOptions = undefined>(
     key: RedisArgument,
     commandOption?: O
   ): Promise<Reply1<O, string | null>> {
     const parser = new BasicCommandParser();
-    parser.push('GET');
-    parser.pushKey(key);
-
-    return this.#execute<Reply1<O, string | null>>(parser.redisArgs, commandOption);
+    GET.parseCommand(parser, key);
+    return this.#executeCommand<O, string | null>(
+      GET,
+      parser,
+      commandOption
+    );
   }
 
   // Workaround for ambiguous command signatures:
@@ -82,8 +116,9 @@ export class NewClient1 {
   ): Promise<Reply1<O, string | null>> {
     const parser = new BasicCommandParser();
     SET.parseCommand(parser, key, value, options);
-    return this.#execute<Reply1<O, string | null>>(
-      parser.redisArgs,
+    return this.#executeCommand<O, string | null>(
+      SET,
+      parser,
       commandOptions
     );
   }
@@ -98,8 +133,21 @@ export class NewClient1 {
     const commandOptions = (isCommandOptions(lastArg) ? lastArg : undefined) as O | undefined;
     const hSetArgs = (commandOptions ? args.slice(0, -1) : args) as HSETArguments;
     HSET.parseCommand(parser, ...hSetArgs);
-    return this.#execute<Reply1<O, number>>(
-      parser.redisArgs,
+    return this.#executeCommand<O, number>(
+      HSET,
+      parser,
+      commandOptions
+    );
+  }
+
+  clientInfo<O extends MaybeCommandOptions = undefined>(
+    commandOptions?: O
+  ): Promise<Reply1<O, ClientInfoReply>> {
+    const parser = new BasicCommandParser();
+    CLIENT_INFO.parseCommand(parser);
+    return this.#executeCommand<O, ClientInfoReply>(
+      CLIENT_INFO,
+      parser,
       commandOptions
     );
   }

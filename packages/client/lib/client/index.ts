@@ -592,7 +592,7 @@ export default class RedisClient<
 
     this.#registerForMetrics();
     this._newClient = new NewClient(this.#queue, this.#socket)
-    this._newClient1 = new NewClient1(this.#queue, this.#socket)
+    this._newClient1 = new NewClient1(this.#queue, this.#socket, this.#options.RESP ?? 2)
 
     if(this.#options.maintNotifications !== 'disabled') {
       new EnterpriseMaintenanceManager(this.#queue, this, this.#options);

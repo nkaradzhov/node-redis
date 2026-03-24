@@ -86,4 +86,34 @@ describe('NewClient1', () => {
       value: Buffer.from('1')
     });
   }, GLOBAL.SERVERS.OPEN);
+
+  testUtils.testWithClient('clientInfo applies transform only in idiomatic mode', async client => {
+    const defaultReply = await client.newClient1.clientInfo();
+    assert.equal(typeof defaultReply.id, 'number');
+    assert.equal(typeof defaultReply.fd, 'number');
+    assert.equal(typeof defaultReply.addr, 'string');
+    assert.equal(typeof defaultReply.cmd, 'string');
+
+    const withCommandOptionsReply = await client.newClient1.clientInfo(
+      makeOptions({ timeout: 1000 })
+    );
+    assert.equal(typeof withCommandOptionsReply.id, 'number');
+    assert.equal(typeof withCommandOptionsReply.addr, 'string');
+
+    const respReply = await client.newClient1.clientInfo(
+      makeOptions({ parseMode: 'resp' })
+    );
+    assert.equal(
+      respReply.type === 'VERBATIM_STRING' || respReply.type === 'BLOB_STRING',
+      true
+    );
+    assert.equal(Buffer.isBuffer(respReply.value), true);
+    assert.equal(respReply.value.includes(Buffer.from('id=')), true);
+
+    const rawReply = await client.newClient1.clientInfo(
+      makeOptions({ parseMode: 'raw' })
+    );
+    assert.equal(Buffer.isBuffer(rawReply), true);
+    assert.equal(rawReply.includes(Buffer.from('id=')), true);
+  }, GLOBAL.SERVERS.OPEN);
 });
