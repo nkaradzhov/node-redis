@@ -1,7 +1,6 @@
 import { strict as assert } from 'node:assert';
 import testUtils, { GLOBAL } from '../test-utils';
 import { RespReply } from './new-client';
-import { NewClient1 } from './new-client1';
 
 describe('NewClient', () => {
   testUtils.testWithClient('get/getRaw/getResp over a real client', async client => {
