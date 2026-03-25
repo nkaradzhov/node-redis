@@ -28,6 +28,7 @@ import { trace, sanitizeArgs, publish, CHANNELS, type CommandTraceContext } from
 const noop = () => {};
 import { NewClient } from './new-client';
 import { NewClient1 } from './new-client1';
+import { NewClient2 } from './new-client2';
 
 export interface RedisClientOptions<
   M extends RedisModules = RedisModules,
@@ -466,6 +467,7 @@ export default class RedisClient<
 
   _newClient: NewClient;
   _newClient1: NewClient1;
+  _newClient2: NewClient2;
 
   get clientSideCache() {
     return this._self.#clientSideCache;
@@ -593,6 +595,7 @@ export default class RedisClient<
     this.#registerForMetrics();
     this._newClient = new NewClient(this.#queue, this.#socket)
     this._newClient1 = new NewClient1(this.#queue, this.#socket, this.#options.RESP ?? 2)
+    this._newClient2 = new NewClient2(this.#queue, this.#socket, this.#options.RESP ?? 2)
 
     if(this.#options.maintNotifications !== 'disabled') {
       new EnterpriseMaintenanceManager(this.#queue, this, this.#options);
@@ -1758,5 +1761,9 @@ export default class RedisClient<
 
   get newClient1(): NewClient1 {
     return this._self._newClient1
+  }
+
+  get newClient2(): NewClient2 {
+    return this._self._newClient2
   }
 }

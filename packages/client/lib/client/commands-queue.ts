@@ -7,11 +7,14 @@ import { AbortError, ErrorReply, CommandTimeoutDuringMaintenanceError, TimeoutEr
 import { MonitorCallback } from '.';
 import { dbgMaintenance } from './enterprise-maintenance-manager';
 
+export type Parser<T> = (reply: Buffer) => T;
+
 export interface CommandOptions<T = TypeMapping> {
   chainId?: symbol;
   asap?: boolean;
   abortSignal?: AbortSignal;
   parseMode?: ParseMode;
+  parser?: Parser<any>;
   /**
    * Maps between RESP and JavaScript types
    */

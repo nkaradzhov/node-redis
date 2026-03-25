@@ -4,33 +4,66 @@ import CLIENT_INFO, { ClientInfoReply } from '../commands/CLIENT_INFO';
 import GET from '../commands/GET';
 import HSET, { HSETArguments } from '../commands/HSET';
 import SET, { SetOptions } from '../commands/SET';
+import { Decoder } from '../RESP/decoder';
 import { Command, RespVersions } from '../RESP/types';
-import { CommandOptions } from './commands-queue';
-import RedisCommandsQueue from './commands-queue';
 import { BrandedCommandOptions, isCommandOptions } from './new-client-command-options';
+import { CommandOptions, Parser } from './commands-queue';
+import RedisCommandsQueue from './commands-queue';
 import { RespReply } from './new-client';
 import { BasicCommandParser } from './parser';
 import RedisSocket from './socket';
+
+export { makeOptions } from './new-client-command-options';
+
+export type NewClient2CommandOptions = Omit<CommandOptions, 'parseMode'> & {
+  parseMode?: never;
+};
 
 export type Reply<
   OPTIONS,
   DEFAULT_REPLY
 > = (
-  OPTIONS extends { parseMode: 'resp' } ? RespReply :
-  OPTIONS extends { parseMode: 'raw' } ? Buffer :
+  OPTIONS extends { parser: Parser<infer T> } ? T :
   DEFAULT_REPLY
 );
 
-export { makeOptions } from './new-client-command-options';
+export const rawParser: Parser<Buffer> = reply => reply;
 
-export class NewClient1 {
+export const respParser: Parser<RespReply> = reply => {
+  let parsed: RespReply | undefined;
+  let error: unknown;
+
+  const decoder = new Decoder({
+    onReply: decoded => {
+      parsed = decoded as RespReply;
+    },
+    onErrorReply: err => {
+      error = err;
+    },
+    onPush: () => undefined,
+    getTypeMapping: () => ({}),
+    getParseMode: () => 'resp'
+  });
+
+  decoder.write(reply);
+
+  if (error !== undefined) {
+    throw error;
+  } else if (parsed === undefined) {
+    throw new Error('Failed to parse raw reply with respParser');
+  }
+
+  return parsed;
+};
+
+export class NewClient2 {
   constructor(
     private queue: RedisCommandsQueue,
     private socket: RedisSocket,
     private resp: RespVersions
   ) { }
 
-  async #executeCommand<O extends CommandOptions, DEFAULT_REPLY>(
+  async #executeCommand<O extends NewClient2CommandOptions, DEFAULT_REPLY>(
     command: Command,
     commandOptions: BrandedCommandOptions<O> | undefined,
     ...args: Array<unknown>
@@ -38,14 +71,26 @@ export class NewClient1 {
     const parser = new BasicCommandParser();
     command.parseCommand(parser, ...args);
 
-    const resolvedOptions = commandOptions as CommandOptions | undefined;
-    const replyPromise = this.queue.addCommand<unknown>(parser.redisArgs, resolvedOptions);
+    const resolvedOptions = commandOptions as O | undefined;
+    const queueOptions = (
+      resolvedOptions?.parser ?
+        {
+          ...resolvedOptions,
+          parseMode: 'raw' as const
+        } :
+        resolvedOptions
+    ) as CommandOptions | undefined;
+
+    const replyPromise = this.queue.addCommand<unknown>(parser.redisArgs, queueOptions);
     this.socket.write(this.queue.commandsToWrite());
     const reply = await replyPromise;
 
-    const parseMode = resolvedOptions?.parseMode;
-    if (parseMode !== undefined && parseMode !== 'idiomatic') {
-      return reply as Reply<O, DEFAULT_REPLY>;
+    if (resolvedOptions?.parser) {
+      if (!Buffer.isBuffer(reply)) {
+        throw new TypeError('Custom parser expected raw Buffer reply');
+      }
+
+      return resolvedOptions.parser(reply) as Reply<O, DEFAULT_REPLY>;
     }
 
     const transformReply = getTransformReply(command, this.resp);
@@ -60,7 +105,7 @@ export class NewClient1 {
     ) as Reply<O, DEFAULT_REPLY>;
   }
 
-  get<O extends CommandOptions>(
+  get<O extends NewClient2CommandOptions>(
     key: RedisArgument,
     commandOption?: BrandedCommandOptions<O>
   ): Promise<Reply<O, string | null>> {
@@ -75,7 +120,7 @@ export class NewClient1 {
   // command options do not have a required discriminator field, so for commands that
   // already accept trailing objects we only treat the last argument as command options
   // when it is branded via `makeOptions(...)`.
-  set<O extends CommandOptions>(
+  set<O extends NewClient2CommandOptions>(
     key: RedisArgument,
     value: RedisArgument | number,
     options?: SetOptions,
@@ -92,7 +137,7 @@ export class NewClient1 {
 
   // Same workaround as `set`: only branded trailing options are interpreted as
   // command options; otherwise all arguments are forwarded to HSET.parseCommand.
-  hSet<O extends CommandOptions>(
+  hSet<O extends NewClient2CommandOptions>(
     ...args: [...HSETArguments, commandOptions?: BrandedCommandOptions<O>]
   ): Promise<Reply<O, number>> {
     const lastArg = args[args.length - 1];
@@ -105,7 +150,7 @@ export class NewClient1 {
     );
   }
 
-  clientInfo<O extends CommandOptions>(
+  clientInfo<O extends NewClient2CommandOptions>(
     commandOptions?: BrandedCommandOptions<O>
   ): Promise<Reply<O, ClientInfoReply>> {
     return this.#executeCommand<O, ClientInfoReply>(
