@@ -103,6 +103,9 @@ describe('NewClient1', () => {
     const respReply = await client.newClient1.clientInfo(
       makeOptions({ parseMode: 'resp' })
     );
+    if (Array.isArray(respReply) || respReply instanceof Map) {
+      assert.fail('CLIENT INFO parseMode=resp should return a scalar RESP node');
+    }
     assert.equal(
       respReply.type === 'VERBATIM_STRING' || respReply.type === 'BLOB_STRING',
       true
