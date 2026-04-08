@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { SinonSpy, spy } from 'sinon';
-import { Decoder, RESP_TYPES } from './decoder';
+import { Decoder, ParseMode, RESP_TYPES } from './decoder';
 import { BlobError, SimpleError } from '../errors';
 import { TypeMapping } from './types';
 import { VerbatimString } from './verbatim-string';
@@ -8,6 +8,8 @@ import { VerbatimString } from './verbatim-string';
 interface Test {
   toWrite: Buffer;
   typeMapping?: TypeMapping;
+  parseMode?: ParseMode;
+  getParseMode?: () => ParseMode;
   replies?: Array<unknown>;
   errorReplies?: Array<unknown>;
   pushReplies?: Array<unknown>;
@@ -34,11 +36,13 @@ function test(name: string, config: Test) {
 function setupTest(config: Test) {
   const onReplySpy = spy(),
     onErrorReplySpy = spy(),
-    onPushSpy = spy();
+    onPushSpy = spy(),
+    getParseMode = config.getParseMode ?? (() => config.parseMode ?? 'idiomatic');
 
   return {
     decoder: new Decoder({
       getTypeMapping: () => config.typeMapping ?? {},
+      getParseMode,
       onReply: onReplySpy,
       onErrorReply: onErrorReplySpy,
       onPush: onPushSpy
@@ -71,6 +75,11 @@ function assertSpyCalls(spy: SinonSpy, replies?: Array<unknown>) {
 }
 
 describe('RESP Decoder', () => {
+  const respNode = (type: string, value: string | Buffer) => ({
+    type,
+    value: Buffer.isBuffer(value) ? value : Buffer.from(value)
+  });
+
   test('Null', {
     toWrite: Buffer.from('_\r\n'),
     replies: [null]
@@ -436,6 +445,92 @@ describe('RESP Decoder', () => {
     test('[0..9]', {
       toWrite: Buffer.from(`>10\r\n:0\r\n:1\r\n:2\r\n:3\r\n:4\r\n:5\r\n:6\r\n:7\r\n:8\r\n:9\r\n`),
       pushReplies: [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]]
+    });
+  });
+
+  describe('Raw Parse Mode', () => {
+    test('SimpleString raw frame', {
+      parseMode: 'raw',
+      toWrite: Buffer.from('+OK\r\n'),
+      replies: [Buffer.from('+OK\r\n')]
+    });
+
+    test('Array raw frame', {
+      parseMode: 'raw',
+      toWrite: Buffer.from('*3\r\n$3\r\nfoo\r\n$3\r\nbar\r\n$3\r\nbaz\r\n'),
+      replies: [Buffer.from('*3\r\n$3\r\nfoo\r\n$3\r\nbar\r\n$3\r\nbaz\r\n')]
+    });
+
+    test('multiple replies in a single chunk', {
+      parseMode: 'raw',
+      toWrite: Buffer.from('+OK\r\n:1\r\n'),
+      replies: [
+        Buffer.from('+OK\r\n'),
+        Buffer.from(':1\r\n')
+      ]
+    });
+
+    test('push is not affected', {
+      parseMode: 'raw',
+      toWrite: Buffer.from('>2\r\n+foo\r\n+bar\r\n'),
+      pushReplies: [['foo', 'bar']]
+    });
+  });
+
+  describe('RESP Parse Mode', () => {
+    test('null node', {
+      parseMode: 'resp',
+      toWrite: Buffer.from('_\r\n'),
+      replies: [{
+        type: 'NULL',
+        value: Buffer.alloc(0)
+      }]
+    });
+
+    test('array of typed nodes', {
+      parseMode: 'resp',
+      toWrite: Buffer.from('*3\r\n$3\r\nfoo\r\n$3\r\nbar\r\n$3\r\nbaz\r\n'),
+      replies: [[
+        respNode('BLOB_STRING', 'foo'),
+        respNode('BLOB_STRING', 'bar'),
+        respNode('BLOB_STRING', 'baz')
+      ]]
+    });
+
+    test('map as Map with typed keys and values', {
+      parseMode: 'resp',
+      toWrite: Buffer.from('%2\r\n+foo\r\n:1\r\n+bar\r\n$3\r\nbaz\r\n'),
+      replies: [new Map([
+        [respNode('SIMPLE_STRING', 'foo'), respNode('NUMBER', '1')],
+        [respNode('SIMPLE_STRING', 'bar'), respNode('BLOB_STRING', 'baz')]
+      ])]
+    });
+
+    test('error replies are not affected', {
+      parseMode: 'resp',
+      toWrite: Buffer.from('-ERROR\r\n'),
+      errorReplies: [new SimpleError('ERROR')]
+    });
+  });
+
+  describe('Parse Mode Switching', () => {
+    it('switches mode for each top-level reply', () => {
+      const setup = setupTest({
+        toWrite: Buffer.from('+OK\r\n:1\r\n'),
+        getParseMode: (() => {
+          let i = 0;
+          return () => i++ === 0 ? 'raw' : 'idiomatic';
+        })(),
+        replies: [
+          Buffer.from('+OK\r\n'),
+          1
+        ]
+      });
+
+      setup.decoder.write(Buffer.from('+OK\r\n:1\r\n'));
+      assert.equal(setup.onReplySpy.callCount, 2);
+      assert.deepEqual(setup.onReplySpy.getCall(0).args, [Buffer.from('+OK\r\n')]);
+      assert.deepEqual(setup.onReplySpy.getCall(1).args, [1]);
     });
   });
 });

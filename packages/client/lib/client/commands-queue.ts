@@ -1,6 +1,6 @@
 import { DoublyLinkedNode, DoublyLinkedList, EmptyAwareSinglyLinkedList } from './linked-list';
 import encodeCommand from '../RESP/encoder';
-import { Decoder, PUSH_TYPE_MAPPING, RESP_TYPES } from '../RESP/decoder';
+import { Decoder, ParseMode, PUSH_TYPE_MAPPING, RESP_TYPES } from '../RESP/decoder';
 import { TypeMapping, ReplyUnion, RespVersions, RedisArgument } from '../RESP/types';
 import { ChannelListeners, PubSub, PubSubCommand, PubSubListener, PubSubType, PubSubTypeListeners } from './pub-sub';
 import { AbortError, ErrorReply, CommandTimeoutDuringMaintenanceError, TimeoutError } from '../errors';
@@ -11,6 +11,7 @@ export interface CommandOptions<T = TypeMapping> {
   chainId?: symbol;
   asap?: boolean;
   abortSignal?: AbortSignal;
+  parseMode?: ParseMode;
   /**
    * Maps between RESP and JavaScript types
    */
@@ -45,6 +46,7 @@ interface CommandWaitingForReply {
   resolve(reply?: unknown): void;
   reject(err: unknown): void;
   channelsCounter: number | undefined;
+  parseMode?: ParseMode;
   typeMapping: TypeMapping | undefined;
 }
 
@@ -192,6 +194,10 @@ export default class RedisCommandsQueue {
     return this.#waitingForReply.head!.value.typeMapping ?? {};
   }
 
+  #getParseMode(): ParseMode {
+    return this.#waitingForReply.head?.value.parseMode ?? 'idiomatic';
+  }
+
   #initiateDecoder() {
     return new Decoder({
       onReply: (reply) => this.#onReply(reply),
@@ -203,6 +209,7 @@ export default class RedisCommandsQueue {
         }
       },
       getTypeMapping: () => this.#getTypeMapping(),
+      getParseMode: () => this.#getParseMode()
     });
   }
 
@@ -271,7 +278,8 @@ export default class RedisCommandsQueue {
         resolve,
         reject,
         channelsCounter: undefined,
-        typeMapping: options?.typeMapping,
+        parseMode: options?.parseMode,
+        typeMapping: options?.typeMapping
       };
       value.slotNumber = options?.slotNumber;
 
