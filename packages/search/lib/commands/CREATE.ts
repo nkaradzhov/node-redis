@@ -409,8 +409,6 @@ export interface CreateOptions {
 }
 
 export default {
-  NOT_KEYED_COMMAND: true,
-  IS_READ_ONLY: true,
   parseCommand(parser: CommandParser, index: RedisArgument, schema: RediSearchSchema, options?: CreateOptions) {
     parser.push('FT.CREATE', index);
 
